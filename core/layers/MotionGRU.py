@@ -12,7 +12,7 @@ class Warp(nn.Module):
         self.conv = nn.Conv2d(inc, outc, kernel_size=neighbour, stride=neighbour, bias=None)
         self.warp_gate = nn.Conv2d(inc, neighbour * neighbour, kernel_size=3, padding=1, stride=1)
         nn.init.constant_(self.warp_gate.weight, 0)
-        self.warp_gate.register_backward_hook(self._set_lr)
+        self.warp_gate.register_full_backward_hook(self._set_lr)
 
     @staticmethod
     def _set_lr(module, grad_input, grad_output):

@@ -2,28 +2,29 @@ import os.path
 import datetime
 import cv2
 import numpy as np
+import torch
 from skimage.metrics import structural_similarity as compare_ssim
 from core.utils import metrics
 from core.utils import preprocess
+import torch
 
 
 def train(model, ims, real_input_flag, configs, itr):
     cost = model.train(ims, real_input_flag)
     if configs.reverse_input:
-        ims_rev = np.flip(ims, axis=1).copy()
+        ims_rev = torch.flip(ims, dims=[1]).clone()
         cost += model.train(ims_rev, real_input_flag)
         cost = cost / 2
 
     if itr % configs.display_interval == 0:
-        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'itr: ' + str(itr))
-        print('training loss: ' + str(cost))
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'itr: ' + str(itr)+'    training loss: ' + str(cost))
 
 
 def test(model, test_input_handle, configs, itr):
     print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'itr: ' + str(itr))
-    test_input_handle.begin(do_shuffle=False)
     res_path = os.path.join(configs.gen_frm_dir, str(itr))
-    os.mkdir(res_path)
+    if not os.path.exists(res_path):
+        os.mkdir(res_path)
     avg_mse = 0
     batch_id = 0
     img_mse, ssim = [], []
@@ -47,13 +48,16 @@ def test(model, test_input_handle, configs, itr):
          configs.img_width // configs.patch_size,
          configs.patch_size ** 2 * configs.img_channel))
 
-    while (test_input_handle.no_batch_left() == False):
-        batch_id = batch_id + 1
-        test_ims = test_input_handle.get_batch()
+    # while (test_input_handle.no_batch_left() == False):
+    for test_ims in test_input_handle:
+        if batch_id > 5:
+            break
+        print(batch_id)
         test_dat = preprocess.reshape_patch(test_ims, configs.patch_size)
 
-        img_gen = model.test(test_dat, real_input_flag)
+        img_gen = model.test(test_dat, real_input_flag)  #这里没有把原图给reshape掉
 
+        test_ims = test_ims.data.detach().cpu().numpy()
         img_gen = preprocess.reshape_patch_back(img_gen, configs.patch_size)
         output_length = configs.total_length - configs.input_length
         img_gen_length = img_gen.shape[1]
@@ -80,10 +84,13 @@ def test(model, test_input_handle, configs, itr):
                 score, _ = compare_ssim(pred_frm[b], real_frm[b], full=True, multichannel=True)
                 ssim[i] += score
 
+        batch_id = batch_id + 1
+
         # save prediction examples
         if batch_id <= configs.num_save_samples:
             path = os.path.join(res_path, str(batch_id))
-            os.mkdir(path)
+            if not os.path.exists(path):
+                os.mkdir(path)
             for i in range(configs.total_length):
                 name = 'gt' + str(i + 1) + '.png'
                 file_name = os.path.join(path, name)
@@ -97,7 +104,6 @@ def test(model, test_input_handle, configs, itr):
                 img_pd = np.minimum(img_pd, 1)
                 img_pd = np.uint8(img_pd * 255)
                 cv2.imwrite(file_name, img_pd)
-        test_input_handle.next()
 
     avg_mse = avg_mse / (batch_id * configs.batch_size)
     print('mse per seq: ' + str(avg_mse))

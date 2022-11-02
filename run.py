@@ -8,7 +8,7 @@ import math
 from core.data_provider import datasets_factory
 from core.models.model_factory import Model
 from core.utils import preprocess
-import core.trainer as trainer
+import core.trainer1 as trainer
 
 # -----------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description='PyTorch video prediction model - PredRNN')
@@ -31,6 +31,8 @@ parser.add_argument('--img_width', type=int, default=128)
 parser.add_argument('--img_channel', type=int, default=1)
 
 # model
+parser.add_argument('--batch_size', type=int, default=8)
+parser.add_argument('--num_workers', type=int, default=2)
 parser.add_argument('--model_name', type=str, default='MotionRNN_PredRNN')
 parser.add_argument('--pretrained_model', type=str, default='')
 parser.add_argument('--num_hidden', type=str, default='64,64,64,64')
@@ -52,16 +54,18 @@ parser.add_argument('--sampling_changing_rate', type=float, default=0.00002)
 # optimization
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--reverse_input', type=int, default=1)
-parser.add_argument('--batch_size', type=int, default=8)
+
 parser.add_argument('--max_iterations', type=int, default=80000)
-parser.add_argument('--display_interval', type=int, default=100)
+parser.add_argument('--display_interval', type=int, default=10)
 parser.add_argument('--test_interval', type=int, default=5000)
 parser.add_argument('--snapshot_interval', type=int, default=5000)
-parser.add_argument('--num_save_samples', type=int, default=10)
+parser.add_argument('--num_save_samples', type=int, default=5)
 # parser.add_argument('--n_gpu', type=int, default=1)
 
 args = parser.parse_args()
-print(args)
+
+
+# print(args)
 
 
 def schedule_sampling(eta, itr):
@@ -104,41 +108,66 @@ def schedule_sampling(eta, itr):
 
 
 def train_wrapper(model):
+    begin = 0
     if args.pretrained_model:
         model.load(args.pretrained_model)
+        begin = int(args.pretrained_model.split('-')[-1])
     # load data
-    train_input_handle, test_input_handle = datasets_factory.data_provider(
-        args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
-        seq_length=args.total_length, is_training=True)
+    train_input_handle = datasets_factory.data_provider(dataset=args.dataset_name,
+                                                        configs=args,
+                                                        data_train_path=args.data_train_path,
+                                                        data_test_path=args.data_val_path,
+                                                        batch_size=args.batch_size,
+                                                        is_training=True,
+                                                        is_shuffle=True)
 
-
+    test_input_handle = datasets_factory.data_provider(dataset=args.dataset_name,
+                                                       configs=args,
+                                                       data_train_path=args.data_train_path,
+                                                       data_test_path=args.data_val_path,
+                                                       batch_size=args.batch_size,
+                                                       is_training=False,
+                                                       is_shuffle=False)
 
     eta = args.sampling_start_value
+    eta -= (begin * args.sampling_changing_rate)  # 训练到5000次后为0
+    itr = begin
+    for epoch in range(0, args.max_iterations):
+        if itr > args.max_iterations:
+            break
 
-    for itr in range(1, args.max_iterations + 1):
-        if train_input_handle.no_batch_left():
-            train_input_handle.begin(do_shuffle=True)
-        ims = train_input_handle.get_batch()
-        ims = preprocess.reshape_patch(ims, args.patch_size)
+        for ims in train_input_handle:
+            if itr > args.max_iterations:
+                break
+            ims = preprocess.reshape_patch(ims, args.patch_size)
 
-        eta, real_input_flag = schedule_sampling(eta, itr)
+            eta, real_input_flag = schedule_sampling(eta, itr)
 
-        trainer.train(model, ims, real_input_flag, args, itr)
+            if itr == 0:
+                print("Validate")
+                trainer.test(model, test_input_handle, args, itr)
 
-        if itr % args.snapshot_interval == 0:
-            model.save(itr)
+            trainer.train(model, ims, real_input_flag, args, itr)
 
-        if itr % args.test_interval == 0:
-            trainer.test(model, test_input_handle, args, itr)
+            if itr % args.snapshot_interval == 0 and itr > begin:
+                model.save(itr)
 
-        train_input_handle.next()
+            if itr % args.test_interval == 0 and itr != 0:
+                print("Validata")
+                trainer.test(model, test_input_handle, args, itr)
+
+            itr += 1
 
 
 def test_wrapper(model):
     model.load(args.pretrained_model)
-    test_input_handle = datasets_factory.data_provider(
-        args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
-        seq_length=args.total_length, is_training=False)
+    test_input_handle = datasets_factory.data_provider(dataset=args.dataset_name,
+                                                       configs=args,
+                                                       data_train_path=args.train_data_paths,
+                                                       data_test_path=args.valid_data_paths,
+                                                       batch_size=args.batch_size,
+                                                       is_training=False,
+                                                       is_shuffle=False)
     trainer.test(model, test_input_handle, args, 'test_result')
 
 
@@ -155,6 +184,7 @@ os.makedirs(args.gen_frm_dir)
 print('Initializing models')
 
 model = Model(args)
+print("Model size: {:.5f}M".format(sum(p.numel() for p in model.network.parameters()) / 1000000.0))
 
 if args.is_training:
     train_wrapper(model)

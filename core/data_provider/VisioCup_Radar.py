@@ -30,7 +30,7 @@ class Radar(Dataset):
             Tc_image = self.image_read(path)
             images.append(Tc_image)
         images = torch.stack(images,dim=0)
-        return images
+        return images.permute([0,2,3,1])
 
     def __len__(self):
         return len(self.path_list)

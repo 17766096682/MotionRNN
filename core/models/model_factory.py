@@ -33,6 +33,8 @@ class Model(object):
         self.network.load_state_dict(stats['net_param'])
 
     def train(self, frames, mask):
+        self.network.train()
+
         frames_tensor = torch.FloatTensor(frames).to(self.configs.device)
         mask_tensor = torch.FloatTensor(mask).to(self.configs.device)
         self.optimizer.zero_grad()
@@ -42,6 +44,8 @@ class Model(object):
         return loss.detach().cpu().numpy()
 
     def test(self, frames, mask):
+        self.network.eval()
+
         frames_tensor = torch.FloatTensor(frames).to(self.configs.device)
         mask_tensor = torch.FloatTensor(mask).to(self.configs.device)
         next_frames, _ = self.network(frames_tensor, mask_tensor)
